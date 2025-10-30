@@ -37,10 +37,6 @@ app = Flask(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Глобальный event loop
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
 # ========== Утилиты ==========
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -146,14 +142,15 @@ async def handle_all_messages(message: types.Message):
 def telegram_webhook():
     try:
         update_data = request.get_json()
-        logger.info(f"Получен update: {update_data}")
+        logger.info(f"Получен update")
         
-        # Обрабатываем в существующем event loop
-        future = asyncio.run_coroutine_threadsafe(
-            dp.feed_update(bot, types.Update(**update_data)), 
-            loop
-        )
-        future.result(timeout=10)  # Ждем результат до 10 секунд
+        # Создаем новый event loop для каждого запроса
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        update = types.Update(**update_data)
+        loop.run_until_complete(dp.feed_update(bot, update))
+        loop.close()
         
         return "OK", 200
         
@@ -168,44 +165,34 @@ def index():
 @app.route("/set_webhook")
 def set_webhook_route():
     try:
-        future = asyncio.run_coroutine_threadsafe(set_webhook(), loop)
-        result = future.result(timeout=10)
-        return f"Webhook установлен: {WEBHOOK_URL}"
+        # Используем requests для простоты
+        import requests
+        response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
+        return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {response.text}"
     except Exception as e:
         return f"Ошибка: {e}"
 
 @app.route("/check")
 def check_webhook():
     try:
-        future = asyncio.run_coroutine_threadsafe(bot.get_webhook_info(), loop)
-        webhook_info = future.result(timeout=10)
-        return {
-            "status": "running",
-            "webhook_url": webhook_info.url,
-            "pending_updates": webhook_info.pending_update_count
-        }
+        import requests
+        response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo')
+        return response.json()
     except Exception as e:
         return {"error": str(e)}
 
-# ========== Установка Webhook ==========
-async def set_webhook():
-    await bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook установлен: {WEBHOOK_URL}")
-
 # ========== Запуск ==========
-def start_bot():
-    """Запуск бота в фоновом режиме"""
-    async def start():
-        await set_webhook()
-        logger.info("Бот запущен и готов к работе!")
-    
-    asyncio.run_coroutine_threadsafe(start(), loop)
-
 if __name__ == "__main__":
     print("🚀 Запуск бота...")
     
-    # Запускаем бота в фоне
-    start_bot()
+    # Устанавливаем webhook при старте
+    try:
+        import requests
+        requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook')
+        requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
+        print("✅ Webhook установлен")
+    except Exception as e:
+        print(f"❌ Ошибка webhook: {e}")
     
     # Запускаем Flask
     port = int(os.environ.get("PORT", 10000))
