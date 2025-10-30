@@ -16,7 +16,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # ========== Настройки ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w")
 CRYPTOPAY_TOKEN = os.getenv("CRYPTOPAY_TOKEN", "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse")
-WEBHOOK_HOST = "https://nft-tracker-bot.onrender.com"  # Render-домен
+
+WEBHOOK_HOST = "https://nft-tracker-bot.onrender.com"  # твой Render-домен
 WEBHOOK_PATH = f"/telegram/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
@@ -184,7 +185,7 @@ def telegram_webhook():
         asyncio.run(dp.process_update(update))
     except Exception as e:
         logger.exception(f"Ошибка обработки Telegram webhook: {e}")
-        return "error", 500
+        return "Error", 500
     return "OK", 200
 
 # ========== Flask webhook от CryptoPay ==========
@@ -194,12 +195,7 @@ def cryptopay_webhook():
     logger.info("Webhook получен: %s", data)
     return "ok", 200
 
-# ========== Главная страница ==========
-@app.route('/')
-def index():
-    return "✅ NFT Tracker Bot is running via Webhook", 200
-
-# ========== Установка Webhook ==========
+# ========== Установка Webhook при старте ==========
 def setup_webhook():
     async def set_hook():
         await bot.delete_webhook(drop_pending_updates=True)
@@ -207,6 +203,11 @@ def setup_webhook():
         logger.info(f"Webhook установлен: {WEBHOOK_URL}")
 
     asyncio.run(set_hook())
+
+# ========== Главная страница ==========
+@app.route('/')
+def index():
+    return "✅ NFT Tracker Bot is running via Webhook", 200
 
 # ========== Запуск ==========
 if __name__ == "__main__":
