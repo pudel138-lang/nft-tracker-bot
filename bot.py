@@ -202,7 +202,6 @@ def cryptopay_webhook():
     return "ok", 200
 
 # ========== Установка Webhook при старте ==========
-@app.before_first_request
 def setup_webhook():
     async def set_hook():
         await bot.delete_webhook(drop_pending_updates=True)
@@ -218,4 +217,5 @@ def index():
 
 # ========== Запуск ==========
 if __name__ == "__main__":
+    setup_webhook()  # <-- вызываем вручную один раз при запуске
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
