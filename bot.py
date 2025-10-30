@@ -5,7 +5,7 @@ from aiogram.types import Update
 import os
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "ТВОЙ_ТОКЕН_ОТ_БОТА"
+TOKEN = "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w"
 WEBHOOK_URL = f"https://nft-tracker-bot.onrender.com/telegram/webhook/{TOKEN}"
 
 # Flask приложение
