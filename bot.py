@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # ========== Настройки ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w")
 WEBHOOK_HOST = "https://nft-tracker-bot.onrender.com"
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_PATH = f"/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 SOFTWARE_GROUP_LINK = "https://t.me/+um2ZFdJnNnM0Mjhi"
@@ -37,6 +37,10 @@ app = Flask(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Глобальный event loop
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 # ========== Утилиты ==========
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -50,11 +54,6 @@ def load_data():
 def save_data(records):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
-
-def append_purchase(record):
-    data = load_data()
-    data.append(record)
-    save_data(data)
 
 def gen_key(version):
     s = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
@@ -87,27 +86,14 @@ def versions_markup():
     kb.adjust(2, 2)
     return kb.as_markup()
 
-def plan_markup(version):
-    kb = InlineKeyboardBuilder()
-    v = version.upper()
-    tariffs = PRICES.get(v, {})
-    for plan_key, price in tariffs.items():
-        if price and price > 0:
-            label = f"{plan_key.capitalize()} — {pretty_price(price)}"
-            cb = f"order|{v}|{plan_key}|{price}"
-            kb.button(text=label, callback_data=cb)
-    kb.button(text="⬅️ Назад", callback_data="menu_buy")
-    kb.adjust(2, 2)
-    return kb.as_markup()
-
 # ========== Хэндлеры ==========
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer("NFT TRACKER", reply_markup=main_menu_markup())
+    await message.answer("🎯 NFT TRACKER BOT", reply_markup=main_menu_markup())
 
 @dp.message(Command("id"))
 async def cmd_id(message: types.Message):
-    await message.answer(f"Your chat_id = {message.from_user.id}")
+    await message.answer(f"🆔 Your chat_id = {message.from_user.id}")
 
 @dp.callback_query(F.data == "menu_buy")
 async def cb_menu_buy(callback: types.CallbackQuery):
@@ -116,30 +102,12 @@ async def cb_menu_buy(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "menu_profile")
 async def cb_menu_profile(callback: types.CallbackQuery):
     uid = callback.from_user.id
-    data = load_data()
-    last = None
-    for rec in reversed(data):
-        if int(rec.get("user_id") or 0) == int(uid):
-            last = rec
-            break
-    if last:
-        text = (
-            f"👤 Профиль\n\n"
-            f"🆔 ID: <code>{quote_html(uid)}</code>\n"
-            f"🔑 Ключ: <code>{quote_html(last.get('key'))}</code>\n"
-            f"⚙ Версия: {quote_html(last.get('version'))}\n"
-            f"📦 План: {quote_html(last.get('plan'))}\n"
-            f"💲 Цена: {quote_html(last.get('price'))}\n"
-            f"📅 Дата: {quote_html(last.get('created_at'))}\n\n"
-            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
-        )
-    else:
-        text = (
-            f"👤 Профиль\n\n"
-            f"🆔 ID: <code>{quote_html(uid)}</code>\n"
-            "🔑 Ключ: <code>не куплен</code>\n\n"
-            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
-        )
+    text = (
+        f"👤 Профиль\n\n"
+        f"🆔 ID: <code>{quote_html(uid)}</code>\n"
+        "🔑 Ключ: <code>не куплен</code>\n\n"
+        f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
+    )
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Назад", callback_data="back_main")
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
@@ -159,70 +127,86 @@ async def cb_menu_ref(callback: types.CallbackQuery):
     kb.button(text="⬅️ Назад", callback_data="back_main")
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
 
-@dp.callback_query(F.data == "menu_lang_en")
-async def cb_menu_lang_en(callback: types.CallbackQuery):
-    text = "✅ Language changed to English."
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Back", callback_data="back_main")
-    await callback.message.edit_text(text, reply_markup=kb.as_markup())
-
 @dp.callback_query(F.data == "back_main")
 async def cb_back_main(callback: types.CallbackQuery):
-    await callback.message.edit_text("NFT TRACKER", reply_markup=main_menu_markup())
+    await callback.message.edit_text("🎯 NFT TRACKER BOT", reply_markup=main_menu_markup())
 
-# Обработчики для версий
 @dp.callback_query(F.data.startswith("ver_"))
 async def cb_select_version(callback: types.CallbackQuery):
     version = callback.data.replace("ver_", "")
-    await callback.message.edit_text(
-        f"💎 Версия: {version}\n📦 Выберите тариф:",
-        reply_markup=plan_markup(version)
-    )
+    await callback.message.answer(f"🔹 Выбрана версия: {version}")
+
+# Простой обработчик всех сообщений
+@dp.message()
+async def handle_all_messages(message: types.Message):
+    await message.answer("🤖 Используйте /start для начала работы")
 
 # ========== Webhook обработчики ==========
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+@app.route(WEBHOOK_PATH, methods=["POST"])
 def telegram_webhook():
     try:
         update_data = request.get_json()
-        update = types.Update(**update_data)
+        logger.info(f"Получен update: {update_data}")
         
-        # Создаем event loop для обработки
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(dp.feed_update(bot, update))
-        loop.close()
+        # Обрабатываем в существующем event loop
+        future = asyncio.run_coroutine_threadsafe(
+            dp.feed_update(bot, types.Update(**update_data)), 
+            loop
+        )
+        future.result(timeout=10)  # Ждем результат до 10 секунд
+        
+        return "OK", 200
         
     except Exception as e:
-        logger.error(f"Ошибка обработки Telegram webhook: {e}")
+        logger.error(f"Ошибка обработки webhook: {e}")
         return "Error", 500
-    return "OK", 200
 
 @app.route("/")
 def index():
     return "✅ NFT Tracker Bot is running via Webhook"
 
-@app.route("/debug")
-def debug():
-    return {
-        "status": "running", 
-        "timestamp": datetime.now().isoformat(),
-        "webhook_url": WEBHOOK_URL
-    }
+@app.route("/set_webhook")
+def set_webhook_route():
+    try:
+        future = asyncio.run_coroutine_threadsafe(set_webhook(), loop)
+        result = future.result(timeout=10)
+        return f"Webhook установлен: {WEBHOOK_URL}"
+    except Exception as e:
+        return f"Ошибка: {e}"
+
+@app.route("/check")
+def check_webhook():
+    try:
+        future = asyncio.run_coroutine_threadsafe(bot.get_webhook_info(), loop)
+        webhook_info = future.result(timeout=10)
+        return {
+            "status": "running",
+            "webhook_url": webhook_info.url,
+            "pending_updates": webhook_info.pending_update_count
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 # ========== Установка Webhook ==========
-async def setup_webhook():
-    try:
-        await bot.set_webhook(WEBHOOK_URL)
-        logger.info(f"Webhook установлен: {WEBHOOK_URL}")
-    except Exception as e:
-        logger.error(f"Ошибка установки webhook: {e}")
+async def set_webhook():
+    await bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook установлен: {WEBHOOK_URL}")
 
 # ========== Запуск ==========
+def start_bot():
+    """Запуск бота в фоновом режиме"""
+    async def start():
+        await set_webhook()
+        logger.info("Бот запущен и готов к работе!")
+    
+    asyncio.run_coroutine_threadsafe(start(), loop)
+
 if __name__ == "__main__":
     print("🚀 Запуск бота...")
     
-    # Устанавливаем webhook
-    asyncio.run(setup_webhook())
+    # Запускаем бота в фоне
+    start_bot()
     
+    # Запускаем Flask
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
