@@ -15,7 +15,7 @@ BOT_TOKEN = "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w"
 WEBHOOK_URL = f"https://nft-tracker-bot.onrender.com/webhook/{BOT_TOKEN}"
 
 # CryptoBot API настройки (получи в @CryptoBot)
-CRYPTOBOT_TOKEN = "ТВОЙ_CRYPTOBOT_TOKEN"  # Получи в @CryptoBot через /start
+CRYPTOBOT_TOKEN = "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse"  # Получи в @CryptoBot через /start
 CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
 
 SOFTWARE_GROUP_LINK = "https://t.me/+um2ZFdJnNnM0Mjhi"
@@ -50,20 +50,20 @@ app = Flask(__name__)
 # ========== CryptoBot API ==========
 def cryptobot_request(method, data=None):
     """Запрос к CryptoBot API"""
-    url = f"{CRYPTOBOT_API_URL}/{method}"
-    
-    headers = {
-        'Crypto-Pay-API-Token': CRYPTOBOT_TOKEN,
-        'Content-Type': 'application/json'
-    }
-    
-    if data:
-        json_data = json.dumps(data).encode('utf-8')
-        req = Request(url, data=json_data, headers=headers)
-    else:
-        req = Request(url, headers=headers)
-    
     try:
+        url = f"{CRYPTOBOT_API_URL}/{method}"
+        
+        headers = {
+            'Crypto-Pay-API-Token': CRYPTOBOT_TOKEN,
+            'Content-Type': 'application/json'
+        }
+        
+        if data:
+            json_data = json.dumps(data).encode('utf-8')
+            req = Request(url, data=json_data, headers=headers)
+        else:
+            req = Request(url, headers=headers)
+        
         with urlopen(req) as response:
             result = json.loads(response.read().decode())
             if result.get('ok'):
@@ -122,15 +122,15 @@ def quote_html(text: str) -> str:
 
 def make_telegram_request(method, data=None):
     """Делает запрос к Telegram API"""
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/{method}'
-    
-    if data:
-        json_data = json.dumps(data).encode('utf-8')
-        req = Request(url, data=json_data, headers={'Content-Type': 'application/json'})
-    else:
-        req = Request(url)
-    
     try:
+        url = f'https://api.telegram.org/bot{BOT_TOKEN}/{method}'
+        
+        if data:
+            json_data = json.dumps(data).encode('utf-8')
+            req = Request(url, data=json_data, headers={'Content-Type': 'application/json'})
+        else:
+            req = Request(url)
+        
         with urlopen(req) as response:
             return json.loads(response.read().decode())
     except Exception as e:
@@ -149,7 +149,6 @@ def send_telegram_message(chat_id, text, reply_markup=None):
 
 def send_telegram_photo(chat_id, photo_path, caption, reply_markup=None):
     """Отправка фото через Telegram API"""
-    # Читаем фото как бинарный файл
     try:
         with open(photo_path, 'rb') as photo_file:
             photo_data = photo_file.read()
@@ -260,6 +259,49 @@ def handle_id(chat_id):
 def handle_menu_buy(chat_id, message_id):
     edit_telegram_message(chat_id, message_id, "💎 Выберите версию:", versions_markup())
 
+def handle_menu_profile(chat_id, message_id, user_id):
+    data = load_data()
+    last_purchase = None
+    
+    for purchase in reversed(data):
+        if str(purchase.get("user_id")) == str(user_id):
+            last_purchase = purchase
+            break
+    
+    if last_purchase:
+        text = (
+            f"👤 Профиль\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"🔑 Ключ: <code>{last_purchase.get('key', 'не куплен')}</code>\n"
+            f"⚙ Версия: {last_purchase.get('version', 'не указана')}\n"
+            f"📦 План: {last_purchase.get('plan', 'не указан')}\n"
+            f"💲 Цена: ${last_purchase.get('price', '0')}\n"
+            f"📅 Дата: {last_purchase.get('created_at', 'не указана')}\n\n"
+            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
+        )
+    else:
+        text = (
+            f"👤 Профиль\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            "🔑 Ключ: <code>не куплен</code>\n\n"
+            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
+        )
+    edit_telegram_message(chat_id, message_id, text, back_button_markup())
+
+def handle_menu_ref(chat_id, message_id, user_id):
+    bot_username = "nft_tracker_soft_bot"
+    link = f"https://t.me/{bot_username}?start=ref{user_id}"
+    text = (
+        f"💰 Реферальная система\n\n"
+        f"🔗 Твоя ссылка:\n{link}\n\n"
+        f"👥 Приглашено: <b>0</b>\n"
+        f"💵 Бонус: <b>0 USD</b>"
+    )
+    edit_telegram_message(chat_id, message_id, text, back_button_markup())
+
+def handle_back_main(chat_id, message_id):
+    edit_telegram_message(chat_id, message_id, "🎯 NFT TRACKER BOT", main_menu_markup())
+
 def handle_select_version(chat_id, message_id, version):
     """Показ версии с фото и описанием"""
     photo_path = VERSION_PHOTOS.get(version)
@@ -318,7 +360,6 @@ def handle_payment(chat_id, message_id, version, plan, price, payment_method):
             }
             
             # Сохраняем в ожидающие платежи
-            pending_file = "pending_payments.json"
             pending_data = load_pending_payments()
             pending_data.append(invoice_data)
             save_pending_payments(pending_data)
@@ -357,11 +398,9 @@ def handle_check_payment(chat_id, message_id, invoice_id):
             handle_successful_payment(chat_id, message_id, invoice_id, invoice_data)
         else:
             # Оплата еще не прошла
-            text = "⏳ Оплата еще не поступила. Нажмите 'Проверить оплату' через минуту."
-            answer_callback_query(chat_id, text)
+            answer_callback_query(chat_id, "⏳ Оплата еще не поступила. Нажмите 'Проверить оплату' через минуту.")
     else:
-        text = "❌ Ошибка проверки платежа."
-        answer_callback_query(chat_id, text)
+        answer_callback_query(chat_id, "❌ Ошибка проверки платежа.")
 
 def handle_successful_payment(chat_id, message_id, invoice_id, invoice_data):
     """Обработка успешной оплаты"""
@@ -416,6 +455,9 @@ def handle_successful_payment(chat_id, message_id, invoice_id, invoice_data):
         else:
             send_telegram_message(chat_id, caption)
 
+def handle_echo(chat_id, text):
+    send_telegram_message(chat_id, f"🤖 Вы написали: {text}\n\nИспользуйте /start для начала работы")
+
 def load_pending_payments():
     """Загрузка ожидающих платежей"""
     pending_file = "pending_payments.json"
@@ -432,9 +474,6 @@ def save_pending_payments(records):
     pending_file = "pending_payments.json"
     with open(pending_file, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
-
-# ... (остальные функции handle_menu_profile, handle_menu_ref и т.д. остаются без изменений)
-# ВАЖНО: Не забудь добавить все остальные функции из предыдущего кода!
 
 # ========== Webhook обработчики ==========
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
@@ -503,6 +542,14 @@ def telegram_webhook():
                 invoice_id = data.replace("check_payment_", "")
                 handle_check_payment(chat_id, message_id, invoice_id)
             
+            # Отмена оплаты
+            elif data.startswith("cancel_payment_"):
+                invoice_id = data.replace("cancel_payment_", "")
+                pending_data = load_pending_payments()
+                pending_data = [order for order in pending_data if order.get('invoice_id') != invoice_id]
+                save_pending_payments(pending_data)
+                edit_telegram_message(chat_id, message_id, "❌ Оплата отменена", main_menu_markup())
+            
             # Смена языка
             elif data == "menu_lang_en":
                 edit_telegram_message(chat_id, message_id, "✅ Language changed to English", back_button_markup())
@@ -515,4 +562,52 @@ def telegram_webhook():
         logger.error(f"Ошибка обработки webhook: {e}")
         return "Error", 500
 
-# ... (остальной код без изменений)
+# ========== CryptoBot Webhook ==========
+@app.route("/cryptobot/webhook", methods=["POST"])
+def cryptobot_webhook():
+    """Webhook от CryptoBot для уведомлений о платежах"""
+    try:
+        data = request.get_json()
+        logger.info(f"CryptoBot webhook: {data}")
+        return "OK", 200
+    except Exception as e:
+        logger.error(f"CryptoBot webhook error: {e}")
+        return "Error", 500
+
+@app.route("/")
+def index():
+    return "✅ NFT Tracker Bot is running via Webhook"
+
+@app.route("/set_webhook")
+def set_webhook_route():
+    try:
+        webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}"
+        with urlopen(webhook_url) as response:
+            result = json.loads(response.read().decode())
+            return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {result}"
+    except Exception as e:
+        return f"Ошибка: {e}"
+
+@app.route("/check")
+def check_webhook():
+    try:
+        with urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo") as response:
+            return json.loads(response.read().decode())
+    except Exception as e:
+        return {"error": str(e)}
+
+# ========== Запуск ==========
+if __name__ == "__main__":
+    print("🚀 Запуск бота с реальной оплатой...")
+    
+    # Устанавливаем webhook при старте
+    try:
+        urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+        urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
+        print("✅ Webhook установлен")
+    except Exception as e:
+        print(f"❌ Ошибка webhook: {e}")
+    
+    # Запускаем Flask
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False)
