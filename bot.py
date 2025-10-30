@@ -5,7 +5,6 @@ import time
 import random
 import string
 import html
-import base64
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 from flask import Flask, request, jsonify
@@ -14,12 +13,13 @@ from flask import Flask, request, jsonify
 BOT_TOKEN = "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w"
 WEBHOOK_URL = f"https://nft-tracker-bot.onrender.com/webhook/{BOT_TOKEN}"
 
-# CryptoBot API настройки (получи в @CryptoBot)
-CRYPTOBOT_TOKEN = "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse"  # Получи в @CryptoBot через /start
+# CryptoBot API настройки (ПОЛУЧИ В @CryptoBot!)
+CRYPTOBOT_TOKEN = "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse"  # ЗАМЕНИ НА РЕАЛЬНЫЙ!
 CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
 
 SOFTWARE_GROUP_LINK = "https://t.me/+um2ZFdJnNnM0Mjhi"
 DATA_FILE = "purchases.json"
+PENDING_FILE = "pending_payments.json"
 
 PRICES = {
     "LITE": {"LIFETIME": 100, "MONTH": 30, "WEEK": 15},
@@ -27,16 +27,9 @@ PRICES = {
     "TERMUX": {"LIFETIME": 100, "MONTH": 30, "WEEK": 15},
 }
 
-# Фото для каждой версии
-VERSION_PHOTOS = {
-    "LITE": "lite.jpg",
-    "VIP": "vip.jpg", 
-    "TERMUX": "termux.jpg"
-}
-
 VERSION_DESCRIPTIONS = {
-    "LITE": "🔹 <b>LITE версия</b>\n\n• Базовый функционал\n• Отслеживание NFT\n• Уведомления\n• Поддержка 10 коллекций",
-    "VIP": "🔸 <b>VIP версия</b>\n\n• Все функции LITE\n• Расширенная аналитика\n• Приоритетная поддержка\n• Неограниченное количество коллекций\n• Эксклюзивные фичи",
+    "LITE": "🔹 <b>LITE версия</b>\n\n• Базовый функционал\n• Отслеживание NFT\n• Уведомления\n• Поддержка 10 ссылок",
+    "VIP": "🔸 <b>VIP версия</b>\n\n• Все функции LITE\n• Расширенная аналитика\n• Приоритетная поддержка\n• Поиск НФТ\n• Эксклюзивные функции",
     "TERMUX": "🟢 <b>Termux версия</b>\n\n• Работа на Android\n• Автономный режим\n• Низкое потребление ресурсов\n• Фоновый режим"
 }
 
@@ -66,11 +59,7 @@ def cryptobot_request(method, data=None):
         
         with urlopen(req) as response:
             result = json.loads(response.read().decode())
-            if result.get('ok'):
-                return result.get('result')
-            else:
-                logger.error(f"CryptoBot API error: {result}")
-                return None
+            return result
     except Exception as e:
         logger.error(f"CryptoBot request error: {e}")
         return None
@@ -82,30 +71,41 @@ def create_cryptobot_invoice(amount, asset="USDT", description="", hidden_messag
         "amount": str(amount),
         "description": description,
         "hidden_message": hidden_message,
-        "paid_btn_name": "callback",
+        "paid_btn_name": "viewItem",
         "paid_btn_url": "https://t.me/nft_tracker_soft_bot",
         "allow_comments": False,
-        "allow_anonymous": False
+        "allow_anonymous": False,
+        "expires_in": 3600  # 1 час
     }
     
-    return cryptobot_request("createInvoice", data)
+    result = cryptobot_request("createInvoice", data)
+    if result and result.get('ok'):
+        return result.get('result')
+    return None
 
-def check_cryptobot_invoice(invoice_id):
-    """Проверка статуса инвойса"""
-    return cryptobot_request("getInvoices", {"invoice_ids": invoice_id})
+def get_invoice_status(invoice_id):
+    """Получение статуса инвойса"""
+    result = cryptobot_request("getInvoices", {"invoice_ids": str(invoice_id)})
+    if result and result.get('ok') and result.get('result'):
+        invoices = result['result']['items']
+        if invoices:
+            return invoices[0]
+    return None
 
 # ========== Утилиты ==========
-def load_data():
-    if not os.path.exists(DATA_FILE):
+def load_data(filename):
+    """Загрузка данных из файла"""
+    if not os.path.exists(filename):
         return []
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []
 
-def save_data(records):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+def save_data(filename, records):
+    """Сохранение данных в файл"""
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
 
 def gen_key(version):
@@ -114,14 +114,11 @@ def gen_key(version):
     ver = (version or "KEY")[:3].upper()
     return f"{ver}-{s}-{t}"
 
-def pretty_price(price_usd):
-    return f"${price_usd}"
-
 def quote_html(text: str) -> str:
     return html.escape(str(text))
 
 def make_telegram_request(method, data=None):
-    """Делает запрос к Telegram API"""
+    """Запрос к Telegram API"""
     try:
         url = f'https://api.telegram.org/bot{BOT_TOKEN}/{method}'
         
@@ -146,30 +143,6 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     if reply_markup:
         data['reply_markup'] = reply_markup
     return make_telegram_request('sendMessage', data)
-
-def send_telegram_photo(chat_id, photo_path, caption, reply_markup=None):
-    """Отправка фото через Telegram API"""
-    try:
-        with open(photo_path, 'rb') as photo_file:
-            photo_data = photo_file.read()
-        
-        # Кодируем в base64 для отправки
-        photo_b64 = base64.b64encode(photo_data).decode('utf-8')
-        
-        data = {
-            'chat_id': chat_id,
-            'photo': f"data:image/jpeg;base64,{photo_b64}",
-            'caption': caption,
-            'parse_mode': 'HTML'
-        }
-        if reply_markup:
-            data['reply_markup'] = reply_markup
-            
-        return make_telegram_request('sendPhoto', data)
-    except Exception as e:
-        logger.error(f"Ошибка отправки фото: {e}")
-        # Если фото не найдено, отправляем текстовое сообщение
-        return send_telegram_message(chat_id, caption, reply_markup)
 
 def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
     data = {
@@ -231,15 +204,12 @@ def plan_markup(version):
     
     return {"inline_keyboard": buttons}
 
-def payment_markup(version, plan, price):
+def payment_markup(version, plan, price, invoice_id):
     return {
         "inline_keyboard": [
-            [
-                {"text": "💳 CryptoBot (USDT)", "callback_data": f"pay_crypto_{version}_{plan}_{price}"},
-            ],
-            [
-                {"text": "⬅️ Назад", "callback_data": f"ver_{version}"}
-            ]
+            [{"text": "💳 Оплатить через CryptoBot", "url": f"https://t.me/CryptoBot?start={invoice_id}"}],
+            [{"text": "🔄 Проверить оплату", "callback_data": f"check_{invoice_id}"}],
+            [{"text": "❌ Отменить", "callback_data": f"cancel_{invoice_id}"}]
         ]
     }
 
@@ -260,7 +230,7 @@ def handle_menu_buy(chat_id, message_id):
     edit_telegram_message(chat_id, message_id, "💎 Выберите версию:", versions_markup())
 
 def handle_menu_profile(chat_id, message_id, user_id):
-    data = load_data()
+    data = load_data(DATA_FILE)
     last_purchase = None
     
     for purchase in reversed(data):
@@ -303,177 +273,135 @@ def handle_back_main(chat_id, message_id):
     edit_telegram_message(chat_id, message_id, "🎯 NFT TRACKER BOT", main_menu_markup())
 
 def handle_select_version(chat_id, message_id, version):
-    """Показ версии с фото и описанием"""
-    photo_path = VERSION_PHOTOS.get(version)
     description = VERSION_DESCRIPTIONS.get(version, f"Версия {version}")
-    
-    if photo_path and os.path.exists(photo_path):
-        # Отправляем фото с описанием
-        caption = f"{description}\n\n💎 Выберите тарифный план:"
-        send_telegram_photo(chat_id, photo_path, caption, plan_markup(version))
-        
-        # Удаляем предыдущее сообщение с меню
-        make_telegram_request('deleteMessage', {
-            'chat_id': chat_id,
-            'message_id': message_id
-        })
-    else:
-        # Если фото нет, отправляем текстовое сообщение
-        text = f"{description}\n\n💎 Выберите тарифный план:"
-        edit_telegram_message(chat_id, message_id, text, plan_markup(version))
+    text = f"{description}\n\n💎 Выберите тарифный план:"
+    edit_telegram_message(chat_id, message_id, text, plan_markup(version))
 
 def handle_select_plan(chat_id, message_id, version, plan, price):
     text = (
         f"🛒 Оформление заказа\n\n"
         f"⚙ Версия: <b>{version}</b>\n"
         f"📦 Тариф: <b>{plan}</b>\n"
-        f"💲 Сумма: <b>${price}</b>\n\n"
-        f"Выберите способ оплаты:"
+        f"💲 Сумма: <b>${price} USDT</b>\n\n"
+        f"Создаем счет для оплаты..."
     )
-    edit_telegram_message(chat_id, message_id, text, payment_markup(version, plan, price))
-
-def handle_payment(chat_id, message_id, version, plan, price, payment_method):
-    """Создание инвойса для оплаты"""
-    if payment_method == "crypto":
-        # Создаем инвойс в CryptoBot
-        description = f"NFT Tracker - {version} {plan}"
-        hidden_message = f"User: {chat_id}, Version: {version}, Plan: {plan}"
+    edit_telegram_message(chat_id, message_id, text)
+    
+    # Создаем инвойс в CryptoBot
+    description = f"NFT Tracker - {version} {plan}"
+    hidden_message = f"User: {chat_id}, Version: {version}, Plan: {plan}"
+    
+    invoice = create_cryptobot_invoice(
+        amount=price,
+        asset="USDT",
+        description=description,
+        hidden_message=hidden_message
+    )
+    
+    if invoice and invoice.get('pay_url'):
+        invoice_id = invoice['invoice_id']
         
-        invoice = create_cryptobot_invoice(
-            amount=price,
-            asset="USDT",
-            description=description,
-            hidden_message=hidden_message
+        # Сохраняем в ожидающие платежи
+        pending_data = load_data(PENDING_FILE)
+        pending_data.append({
+            "invoice_id": invoice_id,
+            "user_id": chat_id,
+            "version": version,
+            "plan": plan,
+            "price": price,
+            "message_id": message_id,
+            "status": "pending",
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "pay_url": invoice['pay_url']
+        })
+        save_data(PENDING_FILE, pending_data)
+        
+        text = (
+            f"💳 Оплата через CryptoBot\n\n"
+            f"⚙ Версия: <b>{version}</b>\n"
+            f"📦 Тариф: <b>{plan}</b>\n"
+            f"💲 Сумма: <b>${price} USDT</b>\n\n"
+            f"Для оплаты нажмите кнопку ниже:\n"
+            f"⏰ Счет действителен 1 час"
         )
         
-        if invoice and invoice.get('pay_url'):
-            # Сохраняем информацию о инвойсе
-            invoice_data = {
-                "invoice_id": invoice['invoice_id'],
-                "user_id": chat_id,
-                "version": version,
-                "plan": plan,
-                "price": price,
-                "status": "pending",
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "pay_url": invoice['pay_url']
-            }
-            
-            # Сохраняем в ожидающие платежи
-            pending_data = load_pending_payments()
-            pending_data.append(invoice_data)
-            save_pending_payments(pending_data)
-            
-            text = (
-                f"💳 Оплата через CryptoBot\n\n"
-                f"⚙ Версия: <b>{version}</b>\n"
-                f"📦 Тариф: <b>{plan}</b>\n"
-                f"💲 Сумма: <b>${price} USDT</b>\n\n"
-                f"Для оплаты нажмите на кнопку ниже:\n"
-                f"⏰ Счет действителен 15 минут"
-            )
-            
-            markup = {
-                "inline_keyboard": [
-                    [{"text": "💳 Оплатить сейчас", "url": invoice['pay_url']}],
-                    [{"text": "🔄 Проверить оплату", "callback_data": f"check_payment_{invoice['invoice_id']}"}],
-                    [{"text": "❌ Отменить", "callback_data": f"cancel_payment_{invoice['invoice_id']}"}]
-                ]
-            }
-            
-            edit_telegram_message(chat_id, message_id, text, markup)
-        else:
-            text = "❌ Ошибка создания счета. Попробуйте позже."
-            edit_telegram_message(chat_id, message_id, text)
+        edit_telegram_message(chat_id, message_id, text, payment_markup(version, plan, price, invoice_id))
+    else:
+        text = "❌ Ошибка создания счета. Попробуйте позже."
+        edit_telegram_message(chat_id, message_id, text)
 
 def handle_check_payment(chat_id, message_id, invoice_id):
     """Проверка статуса оплаты"""
-    invoice = check_cryptobot_invoice(invoice_id)
+    invoice = get_invoice_status(invoice_id)
     
-    if invoice and len(invoice) > 0:
-        invoice_data = invoice[0]
+    if not invoice:
+        answer_callback_query(chat_id, "❌ Ошибка проверки платежа")
+        return
+    
+    status = invoice.get('status', 'active')
+    
+    if status == 'paid':
+        # Находим заказ
+        pending_data = load_data(PENDING_FILE)
+        order_data = None
+        order_index = -1
         
-        if invoice_data.get('status') == 'paid':
-            # Оплата прошла успешно
-            handle_successful_payment(chat_id, message_id, invoice_id, invoice_data)
+        for i, order in enumerate(pending_data):
+            if order.get('invoice_id') == invoice_id:
+                order_data = order
+                order_index = i
+                break
+        
+        if order_data:
+            # Генерируем ключ
+            key = gen_key(order_data['version'])
+            
+            # Сохраняем покупку
+            purchase_data = {
+                "user_id": chat_id,
+                "version": order_data['version'],
+                "plan": order_data['plan'],
+                "price": order_data['price'],
+                "key": key,
+                "payment_method": "cryptobot",
+                "status": "paid",
+                "invoice_id": invoice_id,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            data = load_data(DATA_FILE)
+            data.append(purchase_data)
+            save_data(DATA_FILE, data)
+            
+            # Удаляем из ожидающих
+            pending_data.pop(order_index)
+            save_data(PENDING_FILE, pending_data)
+            
+            text = (
+                f"✅ Оплата подтверждена!\n\n"
+                f"⚙ Версия: <b>{order_data['version']}</b>\n"
+                f"📦 Тариф: <b>{order_data['plan']}</b>\n"
+                f"💲 Сумма: <b>${order_data['price']}</b>\n"
+                f"🔑 Ваш ключ: <code>{key}</code>\n\n"
+                f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}\n\n"
+                f"⚠️ Сохраните ключ в надежном месте!"
+            )
+            edit_telegram_message(chat_id, message_id, text)
         else:
-            # Оплата еще не прошла
-            answer_callback_query(chat_id, "⏳ Оплата еще не поступила. Нажмите 'Проверить оплату' через минуту.")
+            answer_callback_query(chat_id, "❌ Заказ не найден")
     else:
-        answer_callback_query(chat_id, "❌ Ошибка проверки платежа.")
+        answer_callback_query(chat_id, "⏳ Оплата еще не поступила")
 
-def handle_successful_payment(chat_id, message_id, invoice_id, invoice_data):
-    """Обработка успешной оплаты"""
-    # Находим данные о заказе
-    pending_data = load_pending_payments()
-    order_data = None
+def handle_cancel_payment(chat_id, message_id, invoice_id):
+    """Отмена оплаты"""
+    pending_data = load_data(PENDING_FILE)
+    pending_data = [order for order in pending_data if order.get('invoice_id') != invoice_id]
+    save_data(PENDING_FILE, pending_data)
     
-    for order in pending_data:
-        if order.get('invoice_id') == invoice_id:
-            order_data = order
-            break
-    
-    if order_data:
-        # Генерируем ключ
-        key = gen_key(order_data['version'])
-        
-        # Сохраняем покупку
-        purchase_data = {
-            "user_id": chat_id,
-            "version": order_data['version'],
-            "plan": order_data['plan'],
-            "price": order_data['price'],
-            "key": key,
-            "payment_method": "cryptobot",
-            "status": "paid",
-            "invoice_id": invoice_id,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        data = load_data()
-        data.append(purchase_data)
-        save_data(data)
-        
-        # Удаляем из ожидающих
-        pending_data = [order for order in pending_data if order.get('invoice_id') != invoice_id]
-        save_pending_payments(pending_data)
-        
-        # Показываем фото версии с ключом
-        photo_path = VERSION_PHOTOS.get(order_data['version'])
-        caption = (
-            f"✅ Оплата подтверждена!\n\n"
-            f"⚙ Версия: <b>{order_data['version']}</b>\n"
-            f"📦 Тариф: <b>{order_data['plan']}</b>\n"
-            f"💲 Сумма: <b>${order_data['price']}</b>\n"
-            f"🔑 Ваш ключ: <code>{key}</code>\n\n"
-            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}\n\n"
-            f"⚠️ Сохраните ключ в надежном месте!"
-        )
-        
-        if photo_path and os.path.exists(photo_path):
-            send_telegram_photo(chat_id, photo_path, caption)
-        else:
-            send_telegram_message(chat_id, caption)
+    edit_telegram_message(chat_id, message_id, "❌ Оплата отменена", main_menu_markup())
 
 def handle_echo(chat_id, text):
     send_telegram_message(chat_id, f"🤖 Вы написали: {text}\n\nИспользуйте /start для начала работы")
-
-def load_pending_payments():
-    """Загрузка ожидающих платежей"""
-    pending_file = "pending_payments.json"
-    if not os.path.exists(pending_file):
-        return []
-    try:
-        with open(pending_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-def save_pending_payments(records):
-    """Сохранение ожидающих платежей"""
-    pending_file = "pending_payments.json"
-    with open(pending_file, "w", encoding="utf-8") as f:
-        json.dump(records, f, indent=2, ensure_ascii=False)
 
 # ========== Webhook обработчики ==========
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
@@ -527,28 +455,15 @@ def telegram_webhook():
                     price = parts[3]
                     handle_select_plan(chat_id, message_id, version, plan, price)
             
-            # Оплата
-            elif data.startswith("pay_"):
-                parts = data.split("_")
-                if len(parts) >= 5:
-                    payment_method = parts[1]
-                    version = parts[2]
-                    plan = parts[3]
-                    price = parts[4]
-                    handle_payment(chat_id, message_id, version, plan, price, payment_method)
-            
             # Проверка оплаты
-            elif data.startswith("check_payment_"):
-                invoice_id = data.replace("check_payment_", "")
+            elif data.startswith("check_"):
+                invoice_id = data.replace("check_", "")
                 handle_check_payment(chat_id, message_id, invoice_id)
             
             # Отмена оплаты
-            elif data.startswith("cancel_payment_"):
-                invoice_id = data.replace("cancel_payment_", "")
-                pending_data = load_pending_payments()
-                pending_data = [order for order in pending_data if order.get('invoice_id') != invoice_id]
-                save_pending_payments(pending_data)
-                edit_telegram_message(chat_id, message_id, "❌ Оплата отменена", main_menu_markup())
+            elif data.startswith("cancel_"):
+                invoice_id = data.replace("cancel_", "")
+                handle_cancel_payment(chat_id, message_id, invoice_id)
             
             # Смена языка
             elif data == "menu_lang_en":
@@ -562,43 +477,13 @@ def telegram_webhook():
         logger.error(f"Ошибка обработки webhook: {e}")
         return "Error", 500
 
-# ========== CryptoBot Webhook ==========
-@app.route("/cryptobot/webhook", methods=["POST"])
-def cryptobot_webhook():
-    """Webhook от CryptoBot для уведомлений о платежах"""
-    try:
-        data = request.get_json()
-        logger.info(f"CryptoBot webhook: {data}")
-        return "OK", 200
-    except Exception as e:
-        logger.error(f"CryptoBot webhook error: {e}")
-        return "Error", 500
-
 @app.route("/")
 def index():
     return "✅ NFT Tracker Bot is running via Webhook"
 
-@app.route("/set_webhook")
-def set_webhook_route():
-    try:
-        webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}"
-        with urlopen(webhook_url) as response:
-            result = json.loads(response.read().decode())
-            return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {result}"
-    except Exception as e:
-        return f"Ошибка: {e}"
-
-@app.route("/check")
-def check_webhook():
-    try:
-        with urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo") as response:
-            return json.loads(response.read().decode())
-    except Exception as e:
-        return {"error": str(e)}
-
 # ========== Запуск ==========
 if __name__ == "__main__":
-    print("🚀 Запуск бота с реальной оплатой...")
+    print("🚀 Запуск бота с РЕАЛЬНОЙ оплатой...")
     
     # Устанавливаем webhook при старте
     try:
