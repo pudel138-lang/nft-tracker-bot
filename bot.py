@@ -85,12 +85,18 @@ def create_cryptobot_invoice(amount, asset="USDT", description="", hidden_messag
 
 def get_invoice_status(invoice_id):
     """Получение статуса инвойса"""
-    result = cryptobot_request("getInvoices", {"invoice_ids": str(invoice_id)})
-    if result and result.get('ok') and result.get('result'):
-        invoices = result['result']['items']
-        if invoices:
-            return invoices[0]
-    return None
+    try:
+        result = cryptobot_request("getInvoices", {"invoice_ids": str(invoice_id)})
+        if result and result.get('ok') and result.get('result'):
+            invoices = result['result']['items']
+            if invoices:
+                return invoices[0]
+        else:
+            logger.error(f"CryptoBot API error: {result}")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting invoice status: {e}")
+        return None
 
 # ========== Утилиты ==========
 def load_data(filename):
@@ -155,8 +161,11 @@ def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
         data['reply_markup'] = reply_markup
     return make_telegram_request('editMessageText', data)
 
-def answer_callback_query(callback_query_id, text=None):
-    data = {'callback_query_id': callback_query_id}
+def answer_callback_query(callback_query_id, text=None, show_alert=False):
+    data = {
+        'callback_query_id': callback_query_id,
+        'show_alert': show_alert
+    }
     if text:
         data['text'] = text
     return make_telegram_request('answerCallbackQuery', data)
@@ -331,8 +340,10 @@ def handle_select_plan(chat_id, message_id, version, plan, price):
         text = "❌ Ошибка создания счета. Попробуйте позже."
         edit_telegram_message(chat_id, message_id, text)
 
-def handle_check_payment(chat_id, message_id, version, plan, price):
+def handle_check_payment(chat_id, message_id, version, plan, price, callback_query_id):
     """Проверка статуса оплаты"""
+    logger.info(f"Checking payment: chat_id={chat_id}, version={version}, plan={plan}, price={price}")
+    
     # Находим заказ по данным
     pending_data = load_data(PENDING_FILE)
     order_data = None
@@ -348,14 +359,14 @@ def handle_check_payment(chat_id, message_id, version, plan, price):
             break
     
     if not order_data:
-        answer_callback_query(chat_id, "❌ Заказ не найден")
+        answer_callback_query(callback_query_id, "❌ Заказ не найден")
         return
     
     invoice_id = order_data.get('invoice_id')
     invoice = get_invoice_status(invoice_id)
     
     if not invoice:
-        answer_callback_query(chat_id, "❌ Ошибка проверки платежа")
+        answer_callback_query(callback_query_id, "❌ Ошибка проверки платежа")
         return
     
     status = invoice.get('status', 'active')
@@ -395,8 +406,11 @@ def handle_check_payment(chat_id, message_id, version, plan, price):
             f"⚠️ Сохраните ключ в надежном месте!"
         )
         edit_telegram_message(chat_id, message_id, text)
+        answer_callback_query(callback_query_id, "✅ Оплата подтверждена!")
+    elif status == 'active':
+        answer_callback_query(callback_query_id, "⏳ Оплата еще не поступила")
     else:
-        answer_callback_query(chat_id, "⏳ Оплата еще не поступила")
+        answer_callback_query(callback_query_id, f"❌ Статус платежа: {status}")
 
 def handle_echo(chat_id, text):
     send_telegram_message(chat_id, f"🤖 Вы написали: {text}\n\nИспользуйте /start для начала работы")
@@ -428,21 +442,27 @@ def telegram_webhook():
             chat_id = callback["message"]["chat"]["id"]
             message_id = callback["message"]["message_id"]
             user_id = callback["from"]["id"]
+            callback_query_id = callback["id"]
             
             # Основное меню
             if data == "menu_buy":
                 handle_menu_buy(chat_id, message_id)
+                answer_callback_query(callback_query_id)
             elif data == "menu_profile":
                 handle_menu_profile(chat_id, message_id, user_id)
+                answer_callback_query(callback_query_id)
             elif data == "menu_ref":
                 handle_menu_ref(chat_id, message_id, user_id)
+                answer_callback_query(callback_query_id)
             elif data == "back_main":
                 handle_back_main(chat_id, message_id)
+                answer_callback_query(callback_query_id)
             
             # Выбор версии
             elif data.startswith("ver_"):
                 version = data.replace("ver_", "")
                 handle_select_version(chat_id, message_id, version)
+                answer_callback_query(callback_query_id)
             
             # Выбор тарифа
             elif data.startswith("plan_"):
@@ -452,6 +472,7 @@ def telegram_webhook():
                     plan = parts[2]
                     price = parts[3]
                     handle_select_plan(chat_id, message_id, version, plan, price)
+                    answer_callback_query(callback_query_id)
             
             # Проверка оплаты (check_LITE_LIFETIME_100)
             elif data.startswith("check_"):
@@ -460,13 +481,20 @@ def telegram_webhook():
                     version = parts[1]
                     plan = parts[2]
                     price = parts[3]
-                    handle_check_payment(chat_id, message_id, version, plan, price)
+                    # Сразу отвечаем на callback query
+                    answer_callback_query(callback_query_id, "🔍 Проверяем оплату...")
+                    # Вызываем проверку платежа
+                    handle_check_payment(chat_id, message_id, version, plan, price, callback_query_id)
+                else:
+                    answer_callback_query(callback_query_id, "❌ Ошибка в данных заказа")
             
             # Смена языка
             elif data == "menu_lang_en":
                 edit_telegram_message(chat_id, message_id, "✅ Language changed to English", back_button_markup())
+                answer_callback_query(callback_query_id)
             
-            answer_callback_query(callback['id'])
+            else:
+                answer_callback_query(callback_query_id)
         
         return "OK", 200
         
