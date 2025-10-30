@@ -5,7 +5,8 @@ import time
 import random
 import string
 import html
-import requests
+from urllib.request import urlopen, Request
+from urllib.parse import urlencode
 from flask import Flask, request, jsonify
 
 # ========== Настройки ==========
@@ -54,9 +55,26 @@ def pretty_price(price_usd):
 def quote_html(text: str) -> str:
     return html.escape(str(text))
 
+def make_telegram_request(method, data=None):
+    """Делает запрос к Telegram API"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/{method}'
+    
+    if data:
+        # Конвертируем данные в JSON
+        json_data = json.dumps(data).encode('utf-8')
+        req = Request(url, data=json_data, headers={'Content-Type': 'application/json'})
+    else:
+        req = Request(url)
+    
+    try:
+        with urlopen(req) as response:
+            return json.loads(response.read().decode())
+    except Exception as e:
+        logger.error(f"Ошибка запроса к Telegram: {e}")
+        return None
+
 def send_telegram_message(chat_id, text, reply_markup=None):
     """Отправка сообщения через Telegram API"""
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     data = {
         'chat_id': chat_id,
         'text': text,
@@ -64,16 +82,11 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     }
     if reply_markup:
         data['reply_markup'] = reply_markup
-    try:
-        response = requests.post(url, json=data)
-        return response.status_code == 200
-    except Exception as e:
-        logger.error(f"Ошибка отправки сообщения: {e}")
-        return False
+    
+    return make_telegram_request('sendMessage', data)
 
 def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
     """Редактирование сообщения через Telegram API"""
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/editMessageText'
     data = {
         'chat_id': chat_id,
         'message_id': message_id,
@@ -82,12 +95,12 @@ def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
     }
     if reply_markup:
         data['reply_markup'] = reply_markup
-    try:
-        response = requests.post(url, json=data)
-        return response.status_code == 200
-    except Exception as e:
-        logger.error(f"Ошибка редактирования сообщения: {e}")
-        return False
+    
+    return make_telegram_request('editMessageText', data)
+
+def answer_callback_query(callback_query_id):
+    """Ответ на callback query"""
+    return make_telegram_request('answerCallbackQuery', {'callback_query_id': callback_query_id})
 
 # ========== Inline меню ==========
 def main_menu_markup():
@@ -144,7 +157,6 @@ def handle_menu_profile(chat_id, message_id, user_id):
     edit_telegram_message(chat_id, message_id, text, back_button_markup())
 
 def handle_menu_ref(chat_id, message_id, user_id):
-    # Используем фиксированное имя бота, так как не можем асинхронно получить информацию
     bot_username = "nft_tracker_soft_bot"  # замени на реальный username бота
     link = f"https://t.me/{bot_username}?start=ref{user_id}"
     text = (
@@ -209,8 +221,7 @@ def telegram_webhook():
                 edit_telegram_message(chat_id, message_id, "✅ Language changed to English", back_button_markup())
             
             # Ответ на callback query (убираем "часики")
-            requests.post(f'https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery', 
-                         json={'callback_query_id': callback['id']})
+            answer_callback_query(callback['id'])
         
         return "OK", 200
         
@@ -225,16 +236,19 @@ def index():
 @app.route("/set_webhook")
 def set_webhook_route():
     try:
-        response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
-        return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {response.text}"
+        # Устанавливаем webhook через прямой URL
+        webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}"
+        with urlopen(webhook_url) as response:
+            result = json.loads(response.read().decode())
+            return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {result}"
     except Exception as e:
         return f"Ошибка: {e}"
 
 @app.route("/check")
 def check_webhook():
     try:
-        response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo')
-        return response.json()
+        with urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo") as response:
+            return json.loads(response.read().decode())
     except Exception as e:
         return {"error": str(e)}
 
@@ -244,8 +258,10 @@ if __name__ == "__main__":
     
     # Устанавливаем webhook при старте
     try:
-        requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook')
-        requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
+        # Удаляем старый webhook
+        urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+        # Устанавливаем новый
+        urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
         print("✅ Webhook установлен")
     except Exception as e:
         print(f"❌ Ошибка webhook: {e}")
