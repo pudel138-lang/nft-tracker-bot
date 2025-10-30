@@ -28,8 +28,8 @@ PRICES = {
 }
 
 VERSION_DESCRIPTIONS = {
-    "LITE": "🔹 <b>LITE версия</b>\n\n• Базовый функционал\n• Отслеживание NFT\n• Уведомления\n• Поддержка 10 ссылок",
-    "VIP": "🔸 <b>VIP версия</b>\n\n• Все функции LITE\n• Расширенная аналитика\n• Приоритетная поддержка\n• Поиск НФТ\n• Эксклюзивные функции",
+    "LITE": "🔹 <b>LITE версия</b>\n\n• Базовый функционал\n• Отслеживание NFT\n• Уведомления\n• Поддержка 10 коллекций",
+    "VIP": "🔸 <b>VIP версия</b>\n\n• Все функции LITE\n• Расширенная аналитика\n• Приоритетная поддержка\n• Неограниченное количество коллекций\n• Эксклюзивные фичи",
     "TERMUX": "🟢 <b>Termux версия</b>\n\n• Работа на Android\n• Автономный режим\n• Низкое потребление ресурсов\n• Фоновый режим"
 }
 
@@ -204,12 +204,13 @@ def plan_markup(version):
     
     return {"inline_keyboard": buttons}
 
-def payment_markup(version, plan, price, invoice_id):
+def payment_markup(version, plan, price, pay_url):
+    """Исправленная разметка для оплаты"""
     return {
         "inline_keyboard": [
-            [{"text": "💳 Оплатить через CryptoBot", "url": f"https://t.me/CryptoBot?start={invoice_id}"}],
-            [{"text": "🔄 Проверить оплату", "callback_data": f"check_{invoice_id}"}],
-            [{"text": "❌ Отменить", "callback_data": f"cancel_{invoice_id}"}]
+            [{"text": "💳 Оплатить через CryptoBot", "url": pay_url}],
+            [{"text": "🔄 Проверить оплату", "callback_data": f"check_{version}_{plan}_{price}"}],
+            [{"text": "❌ Отменить", "callback_data": "back_main"}]
         ]
     }
 
@@ -299,12 +300,12 @@ def handle_select_plan(chat_id, message_id, version, plan, price):
     )
     
     if invoice and invoice.get('pay_url'):
-        invoice_id = invoice['invoice_id']
+        pay_url = invoice['pay_url']
         
         # Сохраняем в ожидающие платежи
         pending_data = load_data(PENDING_FILE)
         pending_data.append({
-            "invoice_id": invoice_id,
+            "invoice_id": invoice['invoice_id'],
             "user_id": chat_id,
             "version": version,
             "plan": plan,
@@ -312,7 +313,7 @@ def handle_select_plan(chat_id, message_id, version, plan, price):
             "message_id": message_id,
             "status": "pending",
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "pay_url": invoice['pay_url']
+            "pay_url": pay_url
         })
         save_data(PENDING_FILE, pending_data)
         
@@ -325,13 +326,32 @@ def handle_select_plan(chat_id, message_id, version, plan, price):
             f"⏰ Счет действителен 1 час"
         )
         
-        edit_telegram_message(chat_id, message_id, text, payment_markup(version, plan, price, invoice_id))
+        edit_telegram_message(chat_id, message_id, text, payment_markup(version, plan, price, pay_url))
     else:
         text = "❌ Ошибка создания счета. Попробуйте позже."
         edit_telegram_message(chat_id, message_id, text)
 
-def handle_check_payment(chat_id, message_id, invoice_id):
+def handle_check_payment(chat_id, message_id, version, plan, price):
     """Проверка статуса оплаты"""
+    # Находим заказ по данным
+    pending_data = load_data(PENDING_FILE)
+    order_data = None
+    order_index = -1
+    
+    for i, order in enumerate(pending_data):
+        if (order.get('user_id') == chat_id and 
+            order.get('version') == version and 
+            order.get('plan') == plan and 
+            str(order.get('price')) == str(price)):
+            order_data = order
+            order_index = i
+            break
+    
+    if not order_data:
+        answer_callback_query(chat_id, "❌ Заказ не найден")
+        return
+    
+    invoice_id = order_data.get('invoice_id')
     invoice = get_invoice_status(invoice_id)
     
     if not invoice:
@@ -341,64 +361,42 @@ def handle_check_payment(chat_id, message_id, invoice_id):
     status = invoice.get('status', 'active')
     
     if status == 'paid':
-        # Находим заказ
-        pending_data = load_data(PENDING_FILE)
-        order_data = None
-        order_index = -1
+        # Генерируем ключ
+        key = gen_key(version)
         
-        for i, order in enumerate(pending_data):
-            if order.get('invoice_id') == invoice_id:
-                order_data = order
-                order_index = i
-                break
+        # Сохраняем покупку
+        purchase_data = {
+            "user_id": chat_id,
+            "version": version,
+            "plan": plan,
+            "price": price,
+            "key": key,
+            "payment_method": "cryptobot",
+            "status": "paid",
+            "invoice_id": invoice_id,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
         
-        if order_data:
-            # Генерируем ключ
-            key = gen_key(order_data['version'])
-            
-            # Сохраняем покупку
-            purchase_data = {
-                "user_id": chat_id,
-                "version": order_data['version'],
-                "plan": order_data['plan'],
-                "price": order_data['price'],
-                "key": key,
-                "payment_method": "cryptobot",
-                "status": "paid",
-                "invoice_id": invoice_id,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            data = load_data(DATA_FILE)
-            data.append(purchase_data)
-            save_data(DATA_FILE, data)
-            
-            # Удаляем из ожидающих
-            pending_data.pop(order_index)
-            save_data(PENDING_FILE, pending_data)
-            
-            text = (
-                f"✅ Оплата подтверждена!\n\n"
-                f"⚙ Версия: <b>{order_data['version']}</b>\n"
-                f"📦 Тариф: <b>{order_data['plan']}</b>\n"
-                f"💲 Сумма: <b>${order_data['price']}</b>\n"
-                f"🔑 Ваш ключ: <code>{key}</code>\n\n"
-                f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}\n\n"
-                f"⚠️ Сохраните ключ в надежном месте!"
-            )
-            edit_telegram_message(chat_id, message_id, text)
-        else:
-            answer_callback_query(chat_id, "❌ Заказ не найден")
+        data = load_data(DATA_FILE)
+        data.append(purchase_data)
+        save_data(DATA_FILE, data)
+        
+        # Удаляем из ожидающих
+        pending_data.pop(order_index)
+        save_data(PENDING_FILE, pending_data)
+        
+        text = (
+            f"✅ Оплата подтверждена!\n\n"
+            f"⚙ Версия: <b>{version}</b>\n"
+            f"📦 Тариф: <b>{plan}</b>\n"
+            f"💲 Сумма: <b>${price}</b>\n"
+            f"🔑 Ваш ключ: <code>{key}</code>\n\n"
+            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}\n\n"
+            f"⚠️ Сохраните ключ в надежном месте!"
+        )
+        edit_telegram_message(chat_id, message_id, text)
     else:
         answer_callback_query(chat_id, "⏳ Оплата еще не поступила")
-
-def handle_cancel_payment(chat_id, message_id, invoice_id):
-    """Отмена оплаты"""
-    pending_data = load_data(PENDING_FILE)
-    pending_data = [order for order in pending_data if order.get('invoice_id') != invoice_id]
-    save_data(PENDING_FILE, pending_data)
-    
-    edit_telegram_message(chat_id, message_id, "❌ Оплата отменена", main_menu_markup())
 
 def handle_echo(chat_id, text):
     send_telegram_message(chat_id, f"🤖 Вы написали: {text}\n\nИспользуйте /start для начала работы")
@@ -455,15 +453,14 @@ def telegram_webhook():
                     price = parts[3]
                     handle_select_plan(chat_id, message_id, version, plan, price)
             
-            # Проверка оплаты
+            # Проверка оплаты (check_LITE_LIFETIME_100)
             elif data.startswith("check_"):
-                invoice_id = data.replace("check_", "")
-                handle_check_payment(chat_id, message_id, invoice_id)
-            
-            # Отмена оплаты
-            elif data.startswith("cancel_"):
-                invoice_id = data.replace("cancel_", "")
-                handle_cancel_payment(chat_id, message_id, invoice_id)
+                parts = data.split("_")
+                if len(parts) >= 4:
+                    version = parts[1]
+                    plan = parts[2]
+                    price = parts[3]
+                    handle_check_payment(chat_id, message_id, version, plan, price)
             
             # Смена языка
             elif data == "menu_lang_en":
