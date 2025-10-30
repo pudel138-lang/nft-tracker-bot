@@ -14,10 +14,8 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ========== Настройки ==========
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w")
-WEBHOOK_HOST = "https://nft-tracker-bot.onrender.com"
-WEBHOOK_PATH = f"/webhook"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+BOT_TOKEN = "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w"
+WEBHOOK_URL = f"https://nft-tracker-bot.onrender.com/webhook/{BOT_TOKEN}"
 
 SOFTWARE_GROUP_LINK = "https://t.me/+um2ZFdJnNnM0Mjhi"
 DATA_FILE = "purchases.json"
@@ -138,7 +136,7 @@ async def handle_all_messages(message: types.Message):
     await message.answer("🤖 Используйте /start для начала работы")
 
 # ========== Webhook обработчики ==========
-@app.route(WEBHOOK_PATH, methods=["POST"])
+@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     try:
         update_data = request.get_json()
@@ -165,7 +163,6 @@ def index():
 @app.route("/set_webhook")
 def set_webhook_route():
     try:
-        # Используем requests для простоты
         import requests
         response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
         return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {response.text}"
