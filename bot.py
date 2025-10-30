@@ -1,17 +1,12 @@
-import asyncio
 import logging
 import json
 import os
 import time
 import random
 import string
-from datetime import datetime
 import html
-
-from flask import Flask, request
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+import requests
+from flask import Flask, request, jsonify
 
 # ========== Настройки ==========
 BOT_TOKEN = "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w"
@@ -32,8 +27,6 @@ logger = logging.getLogger(__name__)
 
 # ========== Инициализация ==========
 app = Flask(__name__)
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
 
 # ========== Утилиты ==========
 def load_data():
@@ -61,94 +54,163 @@ def pretty_price(price_usd):
 def quote_html(text: str) -> str:
     return html.escape(str(text))
 
+def send_telegram_message(chat_id, text, reply_markup=None):
+    """Отправка сообщения через Telegram API"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
+    data = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'HTML'
+    }
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    try:
+        response = requests.post(url, json=data)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения: {e}")
+        return False
+
+def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
+    """Редактирование сообщения через Telegram API"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/editMessageText'
+    data = {
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': text,
+        'parse_mode': 'HTML'
+    }
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    try:
+        response = requests.post(url, json=data)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        return False
+
 # ========== Inline меню ==========
 def main_menu_markup():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Купить ключ", callback_data="menu_buy")
-    kb.button(text="👤 Профиль", callback_data="menu_profile")
-    kb.button(text="💰 Рефералька", callback_data="menu_ref")
-    kb.button(text="🇬🇧 English", callback_data="menu_lang_en")
-    kb.adjust(2, 2)
-    return kb.as_markup()
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🛒 Купить ключ", "callback_data": "menu_buy"},
+                {"text": "👤 Профиль", "callback_data": "menu_profile"}
+            ],
+            [
+                {"text": "💰 Рефералька", "callback_data": "menu_ref"},
+                {"text": "🇬🇧 English", "callback_data": "menu_lang_en"}
+            ]
+        ]
+    }
 
 def versions_markup():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔹 LITE", callback_data="ver_LITE")
-    kb.button(text="🔸 VIP", callback_data="ver_VIP")
-    kb.button(text="🟢 Termux", callback_data="ver_TERMUX")
-    kb.button(text="⬅️ Назад", callback_data="back_main")
-    kb.adjust(2, 2)
-    return kb.as_markup()
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔹 LITE", "callback_data": "ver_LITE"},
+                {"text": "🔸 VIP", "callback_data": "ver_VIP"}
+            ],
+            [
+                {"text": "🟢 Termux", "callback_data": "ver_TERMUX"},
+                {"text": "⬅️ Назад", "callback_data": "back_main"}
+            ]
+        ]
+    }
 
-# ========== Хэндлеры ==========
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer("🎯 NFT TRACKER BOT", reply_markup=main_menu_markup())
+def back_button_markup():
+    return {
+        "inline_keyboard": [[{"text": "⬅️ Назад", "callback_data": "back_main"}]]
+    }
 
-@dp.message(Command("id"))
-async def cmd_id(message: types.Message):
-    await message.answer(f"🆔 Your chat_id = {message.from_user.id}")
+# ========== Обработчики ==========
+def handle_start(chat_id, first_name):
+    text = f"🎯 NFT TRACKER BOT\n\nПривет, {first_name}!"
+    send_telegram_message(chat_id, text, main_menu_markup())
 
-@dp.callback_query(F.data == "menu_buy")
-async def cb_menu_buy(callback: types.CallbackQuery):
-    await callback.message.edit_text("💎 Выберите версию:", reply_markup=versions_markup())
+def handle_id(chat_id):
+    send_telegram_message(chat_id, f"🆔 Your chat_id = {chat_id}")
 
-@dp.callback_query(F.data == "menu_profile")
-async def cb_menu_profile(callback: types.CallbackQuery):
-    uid = callback.from_user.id
+def handle_menu_buy(chat_id, message_id):
+    edit_telegram_message(chat_id, message_id, "💎 Выберите версию:", versions_markup())
+
+def handle_menu_profile(chat_id, message_id, user_id):
     text = (
         f"👤 Профиль\n\n"
-        f"🆔 ID: <code>{quote_html(uid)}</code>\n"
+        f"🆔 ID: <code>{user_id}</code>\n"
         "🔑 Ключ: <code>не куплен</code>\n\n"
         f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
     )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="back_main")
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    edit_telegram_message(chat_id, message_id, text, back_button_markup())
 
-@dp.callback_query(F.data == "menu_ref")
-async def cb_menu_ref(callback: types.CallbackQuery):
-    uid = callback.from_user.id
-    me = await bot.get_me()
-    link = f"https://t.me/{me.username}?start=ref{uid}"
+def handle_menu_ref(chat_id, message_id, user_id):
+    # Используем фиксированное имя бота, так как не можем асинхронно получить информацию
+    bot_username = "nft_tracker_soft_bot"  # замени на реальный username бота
+    link = f"https://t.me/{bot_username}?start=ref{user_id}"
     text = (
         f"💰 Реферальная система\n\n"
         f"🔗 Твоя ссылка:\n{link}\n\n"
         f"👥 Приглашено: <b>0</b>\n"
         f"💵 Бонус: <b>0 USD</b>"
     )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="back_main")
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    edit_telegram_message(chat_id, message_id, text, back_button_markup())
 
-@dp.callback_query(F.data == "back_main")
-async def cb_back_main(callback: types.CallbackQuery):
-    await callback.message.edit_text("🎯 NFT TRACKER BOT", reply_markup=main_menu_markup())
+def handle_back_main(chat_id, message_id):
+    edit_telegram_message(chat_id, message_id, "🎯 NFT TRACKER BOT", main_menu_markup())
 
-@dp.callback_query(F.data.startswith("ver_"))
-async def cb_select_version(callback: types.CallbackQuery):
-    version = callback.data.replace("ver_", "")
-    await callback.message.answer(f"🔹 Выбрана версия: {version}")
+def handle_select_version(chat_id, version):
+    send_telegram_message(chat_id, f"🔹 Выбрана версия: {version}")
 
-# Простой обработчик всех сообщений
-@dp.message()
-async def handle_all_messages(message: types.Message):
-    await message.answer("🤖 Используйте /start для начала работы")
+def handle_echo(chat_id, text):
+    send_telegram_message(chat_id, f"🤖 Вы написали: {text}\n\nИспользуйте /start для начала работы")
 
 # ========== Webhook обработчики ==========
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
     try:
         update_data = request.get_json()
-        logger.info(f"Получен update")
+        logger.info("Получен update от Telegram")
         
-        # Создаем новый event loop для каждого запроса
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        update = types.Update(**update_data)
-        loop.run_until_complete(dp.feed_update(bot, update))
-        loop.close()
+        # Обрабатываем сообщение
+        if "message" in update_data:
+            message = update_data["message"]
+            chat_id = message["chat"]["id"]
+            text = message.get("text", "")
+            
+            if text.startswith("/start"):
+                handle_start(chat_id, message["from"].get("first_name", "Пользователь"))
+            elif text.startswith("/id"):
+                handle_id(chat_id)
+            elif text.startswith("/"):
+                handle_echo(chat_id, text)
+            else:
+                handle_echo(chat_id, text)
+                
+        # Обрабатываем callback queries (кнопки)
+        elif "callback_query" in update_data:
+            callback = update_data["callback_query"]
+            data = callback["data"]
+            chat_id = callback["message"]["chat"]["id"]
+            message_id = callback["message"]["message_id"]
+            user_id = callback["from"]["id"]
+            
+            if data == "menu_buy":
+                handle_menu_buy(chat_id, message_id)
+            elif data == "menu_profile":
+                handle_menu_profile(chat_id, message_id, user_id)
+            elif data == "menu_ref":
+                handle_menu_ref(chat_id, message_id, user_id)
+            elif data == "back_main":
+                handle_back_main(chat_id, message_id)
+            elif data.startswith("ver_"):
+                version = data.replace("ver_", "")
+                handle_select_version(chat_id, version)
+            elif data == "menu_lang_en":
+                edit_telegram_message(chat_id, message_id, "✅ Language changed to English", back_button_markup())
+            
+            # Ответ на callback query (убираем "часики")
+            requests.post(f'https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery', 
+                         json={'callback_query_id': callback['id']})
         
         return "OK", 200
         
@@ -163,7 +225,6 @@ def index():
 @app.route("/set_webhook")
 def set_webhook_route():
     try:
-        import requests
         response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
         return f"Webhook установлен: {WEBHOOK_URL}<br>Response: {response.text}"
     except Exception as e:
@@ -172,7 +233,6 @@ def set_webhook_route():
 @app.route("/check")
 def check_webhook():
     try:
-        import requests
         response = requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo')
         return response.json()
     except Exception as e:
@@ -184,7 +244,6 @@ if __name__ == "__main__":
     
     # Устанавливаем webhook при старте
     try:
-        import requests
         requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook')
         requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}')
         print("✅ Webhook установлен")
