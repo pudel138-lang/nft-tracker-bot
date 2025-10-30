@@ -60,7 +60,6 @@ def make_telegram_request(method, data=None):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/{method}'
     
     if data:
-        # Конвертируем данные в JSON
         json_data = json.dumps(data).encode('utf-8')
         req = Request(url, data=json_data, headers={'Content-Type': 'application/json'})
     else:
@@ -74,7 +73,6 @@ def make_telegram_request(method, data=None):
         return None
 
 def send_telegram_message(chat_id, text, reply_markup=None):
-    """Отправка сообщения через Telegram API"""
     data = {
         'chat_id': chat_id,
         'text': text,
@@ -82,11 +80,9 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     }
     if reply_markup:
         data['reply_markup'] = reply_markup
-    
     return make_telegram_request('sendMessage', data)
 
 def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
-    """Редактирование сообщения через Telegram API"""
     data = {
         'chat_id': chat_id,
         'message_id': message_id,
@@ -95,11 +91,9 @@ def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
     }
     if reply_markup:
         data['reply_markup'] = reply_markup
-    
     return make_telegram_request('editMessageText', data)
 
 def answer_callback_query(callback_query_id):
-    """Ответ на callback query"""
     return make_telegram_request('answerCallbackQuery', {'callback_query_id': callback_query_id})
 
 # ========== Inline меню ==========
@@ -131,6 +125,35 @@ def versions_markup():
         ]
     }
 
+def plan_markup(version):
+    """Меню выбора тарифа для версии"""
+    tariffs = PRICES.get(version, {})
+    buttons = []
+    
+    for plan_key, price in tariffs.items():
+        if price and price > 0:
+            label = f"{plan_key} - ${price}"
+            callback_data = f"plan_{version}_{plan_key}_{price}"
+            buttons.append([{"text": label, "callback_data": callback_data}])
+    
+    buttons.append([{"text": "⬅️ Назад", "callback_data": "menu_buy"}])
+    
+    return {"inline_keyboard": buttons}
+
+def payment_markup(version, plan, price):
+    """Меню оплаты"""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "💳 Оплатить CryptoBot", "callback_data": f"pay_crypto_{version}_{plan}_{price}"},
+                {"text": "💳 Оплатить CryptoPay", "callback_data": f"pay_cryptopay_{version}_{plan}_{price}"}
+            ],
+            [
+                {"text": "⬅️ Назад", "callback_data": f"ver_{version}"}
+            ]
+        ]
+    }
+
 def back_button_markup():
     return {
         "inline_keyboard": [[{"text": "⬅️ Назад", "callback_data": "back_main"}]]
@@ -148,16 +171,37 @@ def handle_menu_buy(chat_id, message_id):
     edit_telegram_message(chat_id, message_id, "💎 Выберите версию:", versions_markup())
 
 def handle_menu_profile(chat_id, message_id, user_id):
-    text = (
-        f"👤 Профиль\n\n"
-        f"🆔 ID: <code>{user_id}</code>\n"
-        "🔑 Ключ: <code>не куплен</code>\n\n"
-        f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
-    )
+    data = load_data()
+    last_purchase = None
+    
+    # Ищем последнюю покупку пользователя
+    for purchase in reversed(data):
+        if purchase.get("user_id") == user_id:
+            last_purchase = purchase
+            break
+    
+    if last_purchase:
+        text = (
+            f"👤 Профиль\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"🔑 Ключ: <code>{last_purchase.get('key', 'не куплен')}</code>\n"
+            f"⚙ Версия: {last_purchase.get('version', 'не указана')}\n"
+            f"📦 План: {last_purchase.get('plan', 'не указан')}\n"
+            f"💲 Цена: ${last_purchase.get('price', '0')}\n"
+            f"📅 Дата: {last_purchase.get('created_at', 'не указана')}\n\n"
+            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
+        )
+    else:
+        text = (
+            f"👤 Профиль\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            "🔑 Ключ: <code>не куплен</code>\n\n"
+            f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
+        )
     edit_telegram_message(chat_id, message_id, text, back_button_markup())
 
 def handle_menu_ref(chat_id, message_id, user_id):
-    bot_username = "nft_tracker_soft_bot"  # замени на реальный username бота
+    bot_username = "nft_tracker_soft_bot"
     link = f"https://t.me/{bot_username}?start=ref{user_id}"
     text = (
         f"💰 Реферальная система\n\n"
@@ -170,8 +214,50 @@ def handle_menu_ref(chat_id, message_id, user_id):
 def handle_back_main(chat_id, message_id):
     edit_telegram_message(chat_id, message_id, "🎯 NFT TRACKER BOT", main_menu_markup())
 
-def handle_select_version(chat_id, version):
-    send_telegram_message(chat_id, f"🔹 Выбрана версия: {version}")
+def handle_select_version(chat_id, message_id, version):
+    text = f"💎 Версия: <b>{version}</b>\n📦 Выберите тарифный план:"
+    edit_telegram_message(chat_id, message_id, text, plan_markup(version))
+
+def handle_select_plan(chat_id, message_id, version, plan, price):
+    text = (
+        f"🛒 Оформление заказа\n\n"
+        f"⚙ Версия: <b>{version}</b>\n"
+        f"📦 Тариф: <b>{plan}</b>\n"
+        f"💲 Сумма: <b>${price}</b>\n\n"
+        f"Выберите способ оплаты:"
+    )
+    edit_telegram_message(chat_id, message_id, text, payment_markup(version, plan, price))
+
+def handle_payment(chat_id, message_id, version, plan, price, payment_method):
+    # Генерируем ключ
+    key = gen_key(version)
+    
+    # Создаем запись о покупке
+    purchase_data = {
+        "user_id": chat_id,
+        "version": version,
+        "plan": plan,
+        "price": price,
+        "key": key,
+        "payment_method": payment_method,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    # Сохраняем в файл
+    data = load_data()
+    data.append(purchase_data)
+    save_data(data)
+    
+    text = (
+        f"✅ Заказ оплачен!\n\n"
+        f"⚙ Версия: <b>{version}</b>\n"
+        f"📦 Тариф: <b>{plan}</b>\n"
+        f"💲 Сумма: <b>${price}</b>\n"
+        f"🔑 Ваш ключ: <code>{key}</code>\n\n"
+        f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}\n\n"
+        f"⚠️ Сохраните ключ в надежном месте!"
+    )
+    edit_telegram_message(chat_id, message_id, text)
 
 def handle_echo(chat_id, text):
     send_telegram_message(chat_id, f"🤖 Вы написали: {text}\n\nИспользуйте /start для начала работы")
@@ -206,6 +292,7 @@ def telegram_webhook():
             message_id = callback["message"]["message_id"]
             user_id = callback["from"]["id"]
             
+            # Основное меню
             if data == "menu_buy":
                 handle_menu_buy(chat_id, message_id)
             elif data == "menu_profile":
@@ -214,13 +301,36 @@ def telegram_webhook():
                 handle_menu_ref(chat_id, message_id, user_id)
             elif data == "back_main":
                 handle_back_main(chat_id, message_id)
+            
+            # Выбор версии
             elif data.startswith("ver_"):
                 version = data.replace("ver_", "")
-                handle_select_version(chat_id, version)
+                handle_select_version(chat_id, message_id, version)
+            
+            # Выбор тарифа (plan_LITE_LIFETIME_100)
+            elif data.startswith("plan_"):
+                parts = data.split("_")
+                if len(parts) >= 4:
+                    version = parts[1]
+                    plan = parts[2]
+                    price = parts[3]
+                    handle_select_plan(chat_id, message_id, version, plan, price)
+            
+            # Оплата (pay_crypto_LITE_LIFETIME_100)
+            elif data.startswith("pay_"):
+                parts = data.split("_")
+                if len(parts) >= 5:
+                    payment_method = parts[1]  # crypto или cryptopay
+                    version = parts[2]
+                    plan = parts[3]
+                    price = parts[4]
+                    handle_payment(chat_id, message_id, version, plan, price, payment_method)
+            
+            # Смена языка
             elif data == "menu_lang_en":
                 edit_telegram_message(chat_id, message_id, "✅ Language changed to English", back_button_markup())
             
-            # Ответ на callback query (убираем "часики")
+            # Ответ на callback query
             answer_callback_query(callback['id'])
         
         return "OK", 200
@@ -236,7 +346,6 @@ def index():
 @app.route("/set_webhook")
 def set_webhook_route():
     try:
-        # Устанавливаем webhook через прямой URL
         webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}"
         with urlopen(webhook_url) as response:
             result = json.loads(response.read().decode())
@@ -258,9 +367,7 @@ if __name__ == "__main__":
     
     # Устанавливаем webhook при старте
     try:
-        # Удаляем старый webhook
         urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
-        # Устанавливаем новый
         urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}")
         print("✅ Webhook установлен")
     except Exception as e:
