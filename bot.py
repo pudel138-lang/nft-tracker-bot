@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 import json
 import os
 import time
@@ -13,13 +12,11 @@ from flask import Flask, request
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import FSInputFile
-import aiohttp
 
 # ========== Настройки ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w")
 CRYPTOPAY_TOKEN = os.getenv("CRYPTOPAY_TOKEN", "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse")
-WEBHOOK_HOST = "https://nft-tracker-bot.onrender.com"  # твой Render-домен
+WEBHOOK_HOST = "https://nft-tracker-bot.onrender.com"  # Render-домен
 WEBHOOK_PATH = f"/telegram/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
@@ -45,11 +42,6 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = Flask(__name__)
-
-main_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(main_loop)
-
-pending_invoices = {}
 
 # ========== Утилиты ==========
 def load_data():
@@ -186,12 +178,13 @@ async def cb_back_main(callback: types.CallbackQuery):
 
 # ========== Flask webhook от Telegram ==========
 @app.route(WEBHOOK_PATH, methods=["POST"])
-async def telegram_webhook():
+def telegram_webhook():
     try:
         update = types.Update(**request.json)
-        await dp.process_update(update)
+        asyncio.run(dp.process_update(update))
     except Exception as e:
         logger.exception(f"Ошибка обработки Telegram webhook: {e}")
+        return "error", 500
     return "OK", 200
 
 # ========== Flask webhook от CryptoPay ==========
@@ -201,7 +194,12 @@ def cryptopay_webhook():
     logger.info("Webhook получен: %s", data)
     return "ok", 200
 
-# ========== Установка Webhook при старте ==========
+# ========== Главная страница ==========
+@app.route('/')
+def index():
+    return "✅ NFT Tracker Bot is running via Webhook", 200
+
+# ========== Установка Webhook ==========
 def setup_webhook():
     async def set_hook():
         await bot.delete_webhook(drop_pending_updates=True)
@@ -210,12 +208,7 @@ def setup_webhook():
 
     asyncio.run(set_hook())
 
-# ========== Главная страница ==========
-@app.route('/')
-def index():
-    return "✅ NFT Tracker Bot is running via Webhook", 200
-
 # ========== Запуск ==========
 if __name__ == "__main__":
-    setup_webhook()  # <-- вызываем вручную один раз при запуске
+    setup_webhook()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
