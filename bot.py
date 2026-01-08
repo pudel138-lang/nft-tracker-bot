@@ -13,24 +13,41 @@ from flask import Flask, request, jsonify
 BOT_TOKEN = "8269202056:AAEsbpsM93ey7C0Zh9dlT6oUKW2a_rFWl5w"
 WEBHOOK_URL = f"https://nft-tracker-bot.onrender.com/webhook/{BOT_TOKEN}"
 
-# CryptoBot API настройки (ПОЛУЧИ В @CryptoBot!)
-CRYPTOBOT_TOKEN = "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse"  # ЗАМЕНИ НА РЕАЛЬНЫЙ!
+# CryptoBot API настройки
+CRYPTOBOT_TOKEN = "480624:AAumVGyvHpmnmTKE5SB71VqMnT7EESjojse"
 CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
 
 SOFTWARE_GROUP_LINK = "https://t.me/+um2ZFdJnNnM0Mjhi"
 DATA_FILE = "purchases.json"
 PENDING_FILE = "pending_payments.json"
 
+# Единые цены для всех продуктов
+UNIFIED_PRICES = {
+    "WEEK": 5,      # 7 дней
+    "TWO_WEEKS": 10,  # 14 дней
+    "MONTH": 15,    # 31 день
+    "LIFETIME": 30  # вечный доступ
+}
+
 PRICES = {
-    "LITE": {"LIFETIME": 100, "MONTH": 30, "WEEK": 15},
-    "VIP": {"LIFETIME": 200, "MONTH": 50, "WEEK": 0},
-    "TERMUX": {"LIFETIME": 100, "MONTH": 30, "WEEK": 15},
+    "LITE": UNIFIED_PRICES,
+    "VIP": UNIFIED_PRICES,
+    "TERMUX": UNIFIED_PRICES,
+    "IPA": UNIFIED_PRICES
+}
+
+PERIOD_NAMES = {
+    "WEEK": "7 дней",
+    "TWO_WEEKS": "14 дней",
+    "MONTH": "31 день",
+    "LIFETIME": "LIFETIME"
 }
 
 VERSION_DESCRIPTIONS = {
     "LITE": "🔹 <b>LITE версия</b>\n\n• Базовый функционал\n• Отслеживание NFT\n• Уведомления\n• Поддержка 10 коллекций",
     "VIP": "🔸 <b>VIP версия</b>\n\n• Все функции LITE\n• Расширенная аналитика\n• Приоритетная поддержка\n• Неограниченное количество коллекций\n• Эксклюзивные фичи",
-    "TERMUX": "🟢 <b>Termux версия</b>\n\n• Работа на Android\n• Автономный режим\n• Низкое потребление ресурсов\n• Фоновый режим"
+    "TERMUX": "🟢 <b>Termux версия</b>\n\n• Работа на Android\n• Автономный режим\n• Низкое потребление ресурсов\n• Фоновый режим",
+    "IPA": "🍎 <b>IPA версия (iPhone)</b>\n\n• Работа на iOS (iPhone)\n• Автономный режим\n• Низкое потребление ресурсов\n• Фоновый режим\n• Оптимизировано для iOS"
 }
 
 # ========== Логирование ==========
@@ -194,27 +211,41 @@ def versions_markup():
             ],
             [
                 {"text": "🟢 Termux", "callback_data": "ver_TERMUX"},
+                {"text": "🍎 IPA (iPhone)", "callback_data": "ver_IPA"}
+            ],
+            [
                 {"text": "⬅️ Назад", "callback_data": "back_main"}
             ]
         ]
     }
 
 def plan_markup(version):
-    tariffs = PRICES.get(version, {})
+    """Клавиатура выбора тарифа с новыми периодами"""
     buttons = []
     
-    for plan_key, price in tariffs.items():
-        if price and price > 0:
-            label = f"{plan_key} - ${price}"
-            callback_data = f"plan_{version}_{plan_key}_{price}"
-            buttons.append([{"text": label, "callback_data": callback_data}])
+    for plan_key, price in UNIFIED_PRICES.items():
+        label = f"{PERIOD_NAMES.get(plan_key, plan_key)} - ${price}"
+        callback_data = f"plan_{version}_{plan_key}_{price}"
+        buttons.append([{"text": label, "callback_data": callback_data}])
     
     buttons.append([{"text": "⬅️ Назад", "callback_data": "menu_buy"}])
     
     return {"inline_keyboard": buttons}
 
+def payment_method_markup(version, plan, price):
+    """Клавиатура выбора способа оплаты"""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "💎 Crypto (USDT)", "callback_data": f"pay_crypto_{version}_{plan}_{price}"},
+                {"text": "₽ Рубли", "callback_data": f"pay_rub_{version}_{plan}_{price}"}
+            ],
+            [{"text": "⬅️ Назад", "callback_data": f"ver_{version}"}]
+        ]
+    }
+
 def payment_markup(version, plan, price, pay_url):
-    """Исправленная разметка для оплаты"""
+    """Клавиатура для оплаты через CryptoBot"""
     return {
         "inline_keyboard": [
             [{"text": "💳 Оплатить через CryptoBot", "url": pay_url}],
@@ -254,7 +285,7 @@ def handle_menu_profile(chat_id, message_id, user_id):
             f"🆔 ID: <code>{user_id}</code>\n"
             f"🔑 Ключ: <code>{last_purchase.get('key', 'не куплен')}</code>\n"
             f"⚙ Версия: {last_purchase.get('version', 'не указана')}\n"
-            f"📦 План: {last_purchase.get('plan', 'не указан')}\n"
+            f"📦 План: {PERIOD_NAMES.get(last_purchase.get('plan', ''), last_purchase.get('plan', 'не указан'))}\n"
             f"💲 Цена: ${last_purchase.get('price', '0')}\n"
             f"📅 Дата: {last_purchase.get('created_at', 'не указана')}\n\n"
             f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}"
@@ -288,10 +319,22 @@ def handle_select_version(chat_id, message_id, version):
     edit_telegram_message(chat_id, message_id, text, plan_markup(version))
 
 def handle_select_plan(chat_id, message_id, version, plan, price):
+    """Показываем выбор способа оплаты"""
     text = (
         f"🛒 Оформление заказа\n\n"
         f"⚙ Версия: <b>{version}</b>\n"
-        f"📦 Тариф: <b>{plan}</b>\n"
+        f"📦 Тариф: <b>{PERIOD_NAMES.get(plan, plan)}</b>\n"
+        f"💲 Сумма: <b>${price}</b>\n\n"
+        f"Выберите способ оплаты:"
+    )
+    edit_telegram_message(chat_id, message_id, text, payment_method_markup(version, plan, price))
+
+def handle_pay_crypto(chat_id, message_id, version, plan, price):
+    """Оплата через CryptoBot"""
+    text = (
+        f"💳 Оплата через CryptoBot\n\n"
+        f"⚙ Версия: <b>{version}</b>\n"
+        f"📦 Тариф: <b>{PERIOD_NAMES.get(plan, plan)}</b>\n"
         f"💲 Сумма: <b>${price} USDT</b>\n\n"
         f"Создаем счет для оплаты..."
     )
@@ -322,14 +365,15 @@ def handle_select_plan(chat_id, message_id, version, plan, price):
             "message_id": message_id,
             "status": "pending",
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "pay_url": pay_url
+            "pay_url": pay_url,
+            "payment_method": "crypto"
         })
         save_data(PENDING_FILE, pending_data)
         
         text = (
             f"💳 Оплата через CryptoBot\n\n"
             f"⚙ Версия: <b>{version}</b>\n"
-            f"📦 Тариф: <b>{plan}</b>\n"
+            f"📦 Тариф: <b>{PERIOD_NAMES.get(plan, plan)}</b>\n"
             f"💲 Сумма: <b>${price} USDT</b>\n\n"
             f"Для оплаты нажмите кнопку ниже:\n"
             f"⏰ Счет действителен 1 час"
@@ -339,6 +383,23 @@ def handle_select_plan(chat_id, message_id, version, plan, price):
     else:
         text = "❌ Ошибка создания счета. Попробуйте позже."
         edit_telegram_message(chat_id, message_id, text)
+
+def handle_pay_rub(chat_id, message_id, version, plan, price):
+    """Оплата в рублях"""
+    text = (
+        f"₽ Оплата в рублях\n\n"
+        f"⚙ Версия: <b>{version}</b>\n"
+        f"📦 Тариф: <b>{PERIOD_NAMES.get(plan, plan)}</b>\n"
+        f"💲 Сумма: <b>${price}</b>\n\n"
+        f"<b>Для оплаты в рублях напишите владельцу:</b>\n"
+        f"👉 @scamdura\n\n"
+        f"Укажите в сообщении:\n"
+        f"• Версию: {version}\n"
+        f"• Тариф: {PERIOD_NAMES.get(plan, plan)}\n"
+        f"• Ваш ID: <code>{chat_id}</code>"
+    )
+    
+    edit_telegram_message(chat_id, message_id, text, back_button_markup())
 
 def handle_check_payment(chat_id, message_id, version, plan, price, callback_query_id):
     """Проверка статуса оплаты"""
@@ -399,8 +460,8 @@ def handle_check_payment(chat_id, message_id, version, plan, price, callback_que
         text = (
             f"✅ Оплата подтверждена!\n\n"
             f"⚙ Версия: <b>{version}</b>\n"
-            f"📦 Тариф: <b>{plan}</b>\n"
-            f"💲 Сумма: <b>${price}</b>\n"
+            f"📦 Тариф: <b>{PERIOD_NAMES.get(plan, plan)}</b>\n"
+            f"💲 Цена: <b>${price}</b>\n"
             f"🔑 Ваш ключ: <code>{key}</code>\n\n"
             f"Ссылка на группу с софтом:\n{SOFTWARE_GROUP_LINK}\n\n"
             f"⚠️ Сохраните ключ в надежном месте!"
@@ -474,16 +535,34 @@ def telegram_webhook():
                     handle_select_plan(chat_id, message_id, version, plan, price)
                     answer_callback_query(callback_query_id)
             
-            # Проверка оплаты (check_LITE_LIFETIME_100)
+            # Выбор способа оплаты - Crypto
+            elif data.startswith("pay_crypto_"):
+                parts = data.split("_")
+                if len(parts) >= 5:
+                    version = parts[2]
+                    plan = parts[3]
+                    price = parts[4]
+                    handle_pay_crypto(chat_id, message_id, version, plan, price)
+                    answer_callback_query(callback_query_id)
+            
+            # Выбор способа оплаты - Рубли
+            elif data.startswith("pay_rub_"):
+                parts = data.split("_")
+                if len(parts) >= 5:
+                    version = parts[2]
+                    plan = parts[3]
+                    price = parts[4]
+                    handle_pay_rub(chat_id, message_id, version, plan, price)
+                    answer_callback_query(callback_query_id)
+            
+            # Проверка оплаты
             elif data.startswith("check_"):
                 parts = data.split("_")
                 if len(parts) >= 4:
                     version = parts[1]
                     plan = parts[2]
                     price = parts[3]
-                    # Сразу отвечаем на callback query
                     answer_callback_query(callback_query_id, "🔍 Проверяем оплату...")
-                    # Вызываем проверку платежа
                     handle_check_payment(chat_id, message_id, version, plan, price, callback_query_id)
                 else:
                     answer_callback_query(callback_query_id, "❌ Ошибка в данных заказа")
@@ -508,7 +587,7 @@ def index():
 
 # ========== Запуск ==========
 if __name__ == "__main__":
-    print("🚀 Запуск бота с РЕАЛЬНОЙ оплатой...")
+    print("🚀 Запуск бота с обновленными ценами и выбором оплаты...")
     
     # Устанавливаем webhook при старте
     try:
